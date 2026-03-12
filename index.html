@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"/>
+  <meta name="theme-color" content="#0f1923"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="Daily Tracker"/>
+  <title>Daily Tracker</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0f1923; }
+    input { -webkit-user-select: text !important; user-select: text !important; caret-color: #a8c5a0 !important; }
+    input::placeholder { color: #364d60; }
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type=number] { -moz-appearance: textfield; }
+    .stabs { display: flex; overflow-x: auto; gap: 6px; padding-bottom: 4px; scrollbar-width: none; -ms-overflow-style: none; }
+    .stabs::-webkit-scrollbar { display: none; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Serif+Display&display=swap');
+  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet"/>
+</head>
+<body>
+  <div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const FULL_DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+
+const REC = {
+  high:{label:"Green — Push hard today", color:"#6db87a"},
+  mid: {label:"Yellow — Moderate intensity", color:"#e8c96e"},
+  low: {label:"Red — Active recovery only", color:"#e8857a"},
+};
+
+const recTier = s => Number(s)>=67?"high":Number(s)>=34?"mid":"low";
+const todayKey = () => new Date().toISOString().split("T")[0];
+const newWorkout = () => ({id:Date.now(),type:"",duration:"",avgHR:"",maxHR:"",strain:"",intensity:"",energy:"",fasted:""});
+
+const defaultLog = () => ({
+  weight:"",weighTime:"",
+  whoopRecovery:"",whoopHRV:"",whoopRHR:"",whoopStrain:"",whoopSleep:"",
+  bedtime:"",wakeTime:"",sleepHours:"",sleepQuality:"",sleepNotes:"",
+  water:"",
+  calories:"",protein:"",carbs:"",fats:"",lastMeal:"",lateEating:"",foodNotes:"",
+  workouts:[newWorkout()],
+  energy:"",hunger:"",stress:"",mood:"",bloating:"",cycleDay:"",notes:"",
+  checklist:{protein:false,water:false,sleep:false,lastMeal:false,whoop:false,calories:false},
+});
+
+const defaultProfile = () => ({
+  name:"", startWeight:"", goalWeight:"",
+  proteinTarget:"100", waterTarget:"2.5",
+  calorieMin:"1300", calorieMax:"1600",
+  useWhoop:true, trackCycle:true,
+});
+
+const SECTIONS = ["whoop","weight","sleep","water","nutrition","training","wellbeing","checklist"];
+const SLABELS = {whoop:"🔋 Whoop",weight:"⚖️ Weight",sleep:"😴 Sleep",water:"💧 Water",nutrition:"🍽️ Nutrition",training:"🏋️ Training",wellbeing:"📊 Wellbeing",checklist:"🎯 Checklist"};
+
+function Input({id, defaultVal, onCommit, placeholder, type="text"}) {
+  const ref = useRef(null);
+  const prevId = useRef(id);
+  useEffect(()=>{
+    if(prevId.current !== id) {
+      prevId.current = id;
+      if(ref.current && ref.current !== document.activeElement) ref.current.value = defaultVal ?? "";
+    }
+  });
+  useEffect(()=>{ if(ref.current) ref.current.value = defaultVal ?? ""; },[id]);
+  return (
+    <input ref={ref} type={type} inputMode={type==="number"?"decimal":"text"}
+      defaultValue={defaultVal??""}
+      placeholder={placeholder}
+      onBlur={e=>onCommit(e.target.value)}
+      style={{width:"100%",boxSizing:"border-box",background:"rgba(255,255,255,0.055)",border:"1.5px solid rgba(255,255,255,0.1)",borderRadius:9,padding:"11px 13px",color:"#e8edf2",fontSize:15,outline:"none",fontFamily:"inherit",WebkitAppearance:"none",appearance:"none"}}
+      onFocus={e=>e.target.style.borderColor="rgba(168,197,160,0.55)"}
+      onBlurCapture={e=>e.target.style.borderColor="rgba(255,255,255,0.1)"}
+    />
+  );
+}
+
+function formatLogForChat(e, date, profile) {
+  const d = new Date(date);
+  const dateStr = d.toLocaleDateString("en-GB",{day:"numeric",month:"long",year:"numeric"});
+  const wods = e.workouts||[];
+  const totalS = wods.reduce((a,w)=>a+(Number(w.strain)||0),0).toFixed(1);
+  const wodBlock = wods.filter(w=>w.type||w.duration||w.avgHR).length===0
+    ? "\n  Rest / Off day"
+    : wods.filter(w=>w.type||w.duration||w.avgHR).map((w,i)=>`
+  Session ${i+1}:
+  Type: ${w.type||"—"}
+  Duration: ${w.duration||"—"}
+  Whoop Strain: ${w.strain||"—"}
+  Avg HR: ${w.avgHR||"—"} bpm  |  Max HR: ${w.maxHR||"—"} bpm
+  Intensity: ${w.intensity||"—"}/5  |  Energy: ${w.energy||"—"}/5
+  Fasted: ${w.fasted||"—"}`).join("\n");
+  const chk=e.checklist||{};
+  const chkScore=Object.values(chk).filter(Boolean).length;
+  const chkBlock=[
+    `  ${chk.protein?"☑":"☐"} Protein ${profile?.proteinTarget||100}g+`,
+    `  ${chk.water?"☑":"☐"} Water ${profile?.waterTarget||2.5}L+`,
+    `  ${chk.sleep?"☑":"☐"} Sleep 7.5h+`,
+    `  ${chk.lastMeal?"☑":"☐"} Last meal 90min before bed`,
+    `  ${chk.whoop?"☑":"☐"} Whoop recovery checked`,
+    `  ${chk.calories?"☑":"☐"} Calories within target`,
+  ].join("\n");
+  return `═══════════════════════════════════
+DAILY CHECK-IN${profile?.name?` — ${profile.name}`:""}
+Date: ${dateStr}
+═══════════════════════════════════
+
+🔋 WHOOP METRICS
+Recovery: ${e.whoopRecovery||"—"}%
+HRV: ${e.whoopHRV||"—"} ms
+RHR: ${e.whoopRHR||"—"} bpm
+Sleep Score: ${e.whoopSleep||"—"}%
+Recommended Strain: ${e.whoopStrain||"—"}
+Total Strain Used: ${totalS!=="0.0"?totalS:"—"}
+
+⚖️ MORNING WEIGH-IN
+Weight: ${e.weight||"—"} kg
+Time weighed: ${e.weighTime||"—"}
+
+😴 SLEEP
+Bedtime: ${e.bedtime||"—"}
+Wake time: ${e.wakeTime||"—"}
+Total hours: ${e.sleepHours||"—"}h
+Quality: ${e.sleepQuality||"—"}/5
+Notes: ${e.sleepNotes||"—"}
+
+💧 WATER
+Total intake: ${e.water||"—"}L
+
+🍽️ NUTRITION
+Calories: ${e.calories||"—"} kcal
+Protein: ${e.protein||"—"}g
+Carbs: ${e.carbs||"—"}g
+Fats: ${e.fats||"—"}g
+Last meal: ${e.lastMeal||"—"}
+Late eating: ${e.lateEating||"—"}
+Notes: ${e.foodNotes||"—"}
+
+🏋️ TRAINING${wodBlock}
+
+📊 WELLBEING
+Energy: ${e.energy||"—"}/5
+Hunger: ${e.hunger||"—"}/5
+Stress: ${e.stress||"—"}/5
+Mood: ${e.mood||"—"}/5
+Bloating: ${e.bloating||"—"}
+Cycle day: ${e.cycleDay||"—"}
+Notes: ${e.notes||"—"}
+
+🎯 DAILY CHECKLIST (${chkScore}/6)
+${chkBlock}
+═══════════════════════════════════`;
+}
+
+function Onboarding({onComplete}) {
+  const [p, setP] = useState(defaultProfile());
+  const setF = (f,v) => setP(prev=>({...prev,[f]:v}));
+  const canProceed = p.startWeight && p.goalWeight;
+  const C={bg:"#0f1923",card:"rgba(255,255,255,0.025)",bd:"rgba(255,255,255,0.075)",txt:"#e8edf2",sub:"#8a9bb0",green:"#a8c5a0",gold:"#c9a96e",red:"#e8857a",blue:"#89b4c9"};
+  const inp = {width:"100%",background:"rgba(255,255,255,0.055)",border:"1.5px solid rgba(255,255,255,0.1)",borderRadius:9,padding:"11px 13px",color:C.txt,fontSize:15,outline:"none",fontFamily:"inherit",WebkitAppearance:"none",MozAppearance:"textfield"};
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans','Segoe UI',sans-serif",color:C.txt,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"24px 20px"}}>
+      <div style={{width:"100%",maxWidth:420}}>
+        <div style={{textAlign:"center",marginBottom:36}}>
+          <div style={{width:56,height:56,borderRadius:16,background:"rgba(168,197,160,0.12)",border:"1px solid rgba(168,197,160,0.3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,margin:"0 auto 16px"}}>📋</div>
+          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:26,color:C.txt}}>Daily Tracker</div>
+          <div style={{fontSize:13,color:C.sub,marginTop:6,lineHeight:1.6}}>Your personal health & habit log. Let's set it up.</div>
+        </div>
+        <div style={{background:C.card,border:`1px solid ${C.bd}`,borderRadius:16,padding:"24px 20px",display:"flex",flexDirection:"column",gap:18}}>
+          <div>
+            <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.sub,textTransform:"uppercase",marginBottom:6}}>Your Name (optional)</div>
+            <input style={inp} type="text" placeholder="e.g. Sarah" value={p.name} onChange={e=>setF("name",e.target.value)} onFocus={e=>e.target.style.borderColor="rgba(168,197,160,0.55)"} onBlur={e=>e.target.style.borderColor="rgba(255,255,255,0.1)"}/>
+          </div>
+          <div>
+            <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.sub,textTransform:"uppercase",marginBottom:6}}>Starting Weight (kg) <span style={{color:C.red}}>*</span></div>
+            <input style={inp} type="number" inputMode="decimal" placeholder="e.g. 75.0" value={p.startWeight} onChange={e=>setF("startWeight",e.target.value)} onFocus={e=>e.target.style.borderColor="rgba(168,197,160,0.55)"} onBlur={e=>e.target.style.borderColor="rgba(255,255,255,0.1)"}/>
+          </div>
+          <div>
+            <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.sub,textTransform:"uppercase",marginBottom:6}}>Goal Weight (kg) <span style={{color:C.red}}>*</span></div>
+            <input style={inp} type="number" inputMode="decimal" placeholder="e.g. 65.0" value={p.goalWeight} onChange={e=>setF("goalWeight",e.target.value)} onFocus={e=>e.target.style.borderColor="rgba(168,197,160,0.55)"} onBlur={e=>e.target.style.borderColor="rgba(255,255,255,0.1)"}/>
+          </div>
+          <div style={{borderTop:`1px solid ${C.bd}`,paddingTop:18}}>
+            <div style={{fontSize:13,fontWeight:600,color:C.txt,marginBottom:14}}>Daily Targets</div>
+            <div style={{display:"flex",gap:"4%",flexWrap:"wrap"}}>
+              {[{label:"Protein (g)",field:"proteinTarget",ph:"100"},{label:"Water (L)",field:"waterTarget",ph:"2.5"},{label:"Min calories",field:"calorieMin",ph:"1300"},{label:"Max calories",field:"calorieMax",ph:"1600"}].map(({label,field,ph})=>(
+                <div key={field} style={{width:"48%",marginBottom:12}}>
+                  <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.sub,textTransform:"uppercase",marginBottom:5}}>{label}</div>
+                  <input style={{...inp,padding:"10px 12px",fontSize:14}} type="number" inputMode="decimal" placeholder={ph} value={p[field]} onChange={e=>setF(field,e.target.value)} onFocus={e=>e.target.style.borderColor="rgba(168,197,160,0.55)"} onBlur={e=>e.target.style.borderColor="rgba(255,255,255,0.1)"}/>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{borderTop:`1px solid ${C.bd}`,paddingTop:18}}>
+            <div style={{fontSize:13,fontWeight:600,color:C.txt,marginBottom:12}}>Features</div>
+            {[{field:"useWhoop",label:"I use a Whoop device",icon:"🔋"},{field:"trackCycle",label:"Track menstrual cycle",icon:"🌸"}].map(({field,label,icon})=>(
+              <div key={field} onClick={()=>setF(field,!p[field])} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 14px",borderRadius:10,background:p[field]?"rgba(168,197,160,0.08)":"transparent",border:`1px solid ${p[field]?"rgba(168,197,160,0.25)":C.bd}`,marginBottom:8,cursor:"pointer"}}>
+                <div style={{display:"flex",alignItems:"center",gap:10}}><span style={{fontSize:18}}>{icon}</span><span style={{fontSize:14,color:C.txt}}>{label}</span></div>
+                <div style={{width:44,height:24,borderRadius:12,background:p[field]?C.green:"rgba(255,255,255,0.1)",position:"relative",flexShrink:0}}>
+                  <div style={{position:"absolute",top:3,left:p[field]?22:3,width:18,height:18,borderRadius:"50%",background:"white",transition:"left 0.2s",boxShadow:"0 1px 4px rgba(0,0,0,0.3)"}}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <button onClick={()=>canProceed&&onComplete(p)} disabled={!canProceed}
+          style={{width:"100%",marginTop:16,padding:"14px",borderRadius:12,border:"none",background:canProceed?C.green:"rgba(255,255,255,0.08)",color:canProceed?"#1a2332":"#4a5a6a",fontSize:15,fontWeight:700,cursor:canProceed?"pointer":"not-allowed",fontFamily:"inherit"}}>
+          {canProceed?"Start Tracking →":"Enter your start & goal weight to continue"}
+        </button>
+        <div style={{fontSize:12,color:C.sub,textAlign:"center",marginTop:12,lineHeight:1.6}}>Your data stays on your device only.<br/>Nothing is sent anywhere.</div>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [profile, setProfile] = useState(null);
+  const [sec, setSec] = useState("weight");
+  const [log, setLog] = useState(defaultLog());
+  const [saved, setSaved] = useState({});
+  const [view, setView] = useState("today");
+  const [saveFb, setSaveFb] = useState(false);
+  const [expWod, setExpWod] = useState(0);
+  const [copied, setCopied] = useState(null);
+  const [showSettings, setShowSettings] = useState(false);
+
+  const key = todayKey();
+  const dow = new Date().getDay();
+
+  useEffect(()=>{
+    try {
+      const s=localStorage.getItem("gLog1");
+      if(s){ const p=JSON.parse(s); if(p.profile) setProfile(p.profile); if(p.logs){ setSaved(p.logs); if(p.logs[key]) setLog(p.logs[key]); } }
+    } catch(e){}
+  },[]);
+
+  const persist = (np, nl) => { try{ localStorage.setItem("gLog1",JSON.stringify({profile:np,logs:nl})); }catch(e){} };
+  const handleOnboard = (p) => { setProfile(p); persist(p,saved); setSec(p.useWhoop?"whoop":"weight"); };
+  const setF   = useCallback((f,v)=>setLog(p=>({...p,[f]:v})),[]);
+  const setChk = useCallback((k,v)=>setLog(p=>({...p,checklist:{...p.checklist,[k]:v}})),[]);
+  const setWod = useCallback((idx,f,v)=>setLog(p=>{const w=[...p.workouts];w[idx]={...w[idx],[f]:v};return{...p,workouts:w};}),[]);
+  const addWod = ()=>{ setLog(p=>({...p,workouts:[...p.workouts,newWorkout()]})); setExpWod(log.workouts.length); };
+  const delWod = idx=>setLog(p=>{const w=p.workouts.filter((_,i)=>i!==idx);return{...p,workouts:w.length?w:[newWorkout()]};});
+  const saveLog = ()=>{ const u={...saved,[key]:log}; setSaved(u); persist(profile,u); setSaveFb(true); setTimeout(()=>setSaveFb(false),2000); };
+  const copyLog = (date)=>{
+    const text=formatLogForChat(saved[date],date,profile);
+    const doIt=()=>{ setCopied(date); setTimeout(()=>setCopied(null),2500); };
+    if(navigator.clipboard?.writeText){ navigator.clipboard.writeText(text).then(doIt).catch(()=>{fb(text);doIt();}); } else { fb(text); doIt(); }
+  };
+  const fb=(t)=>{ const ta=document.createElement("textarea"); ta.value=t; ta.style.cssText="position:fixed;opacity:0;"; document.body.appendChild(ta); ta.focus(); ta.select(); document.execCommand("copy"); document.body.removeChild(ta); };
+
+  if(!profile) return <Onboarding onComplete={handleOnboard}/>;
+
+  const C={bg:"#0f1923",card:"rgba(255,255,255,0.025)",bd:"rgba(255,255,255,0.075)",txt:"#e8edf2",sub:"#8a9bb0",green:"#a8c5a0",blue:"#89b4c9",gold:"#c9a96e",red:"#e8857a"};
+  const recTierVal = log.whoopRecovery?recTier(log.whoopRecovery):null;
+  const totalStrain = log.workouts.reduce((a,w)=>a+(Number(w.strain)||0),0).toFixed(1);
+  const score = Object.values(log.checklist).filter(Boolean).length;
+  const PT=Number(profile.proteinTarget)||100, WT=Number(profile.waterTarget)||2.5;
+  const SW=Number(profile.startWeight)||0, GW=Number(profile.goalWeight)||0, CW=Number(log.weight)||SW;
+  const progressPct = SW&&GW&&SW>GW ? Math.min(100,Math.max(0,((SW-CW)/(SW-GW))*100)) : 0;
+
+  const checkItems = [
+    {key:"protein", label:`Protein ${PT}g+`, sub:log.protein?`${log.protein}g logged`:"Not logged"},
+    {key:"water",   label:`Water ${WT}L+`,   sub:log.water?`${log.water}L logged`:"Not logged"},
+    {key:"sleep",   label:"Sleep 7.5h+",     sub:log.sleepHours?`${log.sleepHours}h logged`:"Not logged"},
+    {key:"lastMeal",label:"Last meal 90min before bed", sub:log.lateEating==="N"?"✓ No late eating":log.lateEating==="Y"?"Late eating flagged":"Not logged"},
+    {key:"whoop",   label:"Whoop recovery checked", sub:log.whoopRecovery?`${log.whoopRecovery}% recovery`:"Not logged"},
+    {key:"calories",label:"Calories within target", sub:log.calories?`${log.calories} kcal`:"Not logged"},
+  ];
+
+  const Lbl=({t})=>(<div style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.sub,textTransform:"uppercase",marginBottom:5}}>{t}</div>);
+  const Field=({label,field,type="text",placeholder="",half=false})=>(<div style={{marginBottom:14,width:half?"48%":"100%"}}><Lbl t={label}/><Input id={field} defaultVal={log[field]} onCommit={v=>setF(field,v)} type={type} placeholder={placeholder}/></div>);
+  const WF=({label,idx,field,type="text",placeholder="",half=false})=>(<div style={{marginBottom:12,width:half?"48%":"100%"}}><Lbl t={label}/><Input id={`w${idx}_${field}_${log.workouts[idx]?.id}`} defaultVal={log.workouts[idx]?.[field]} onCommit={v=>setWod(idx,field,v)} type={type} placeholder={placeholder}/></div>);
+  const Radio=({label,field,opts})=>(<div style={{marginBottom:14}}><Lbl t={label}/><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{opts.map(o=><button key={o} onClick={()=>setF(field,o)} style={{padding:"7px 16px",borderRadius:20,fontSize:13,cursor:"pointer",border:"1px solid",fontFamily:"inherit",background:log[field]===o?"rgba(168,197,160,0.2)":"transparent",borderColor:log[field]===o?C.green:"rgba(255,255,255,0.12)",color:log[field]===o?C.green:C.sub}}>{o}</button>)}</div></div>);
+  const WodRadio=({label,idx,field,opts})=>(<div style={{marginBottom:12}}><Lbl t={label}/><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{opts.map(o=><button key={o} onClick={()=>setWod(idx,field,o)} style={{padding:"6px 14px",borderRadius:20,fontSize:13,cursor:"pointer",border:"1px solid",fontFamily:"inherit",background:log.workouts[idx]?.[field]===o?"rgba(168,197,160,0.2)":"transparent",borderColor:log.workouts[idx]?.[field]===o?C.green:"rgba(255,255,255,0.12)",color:log.workouts[idx]?.[field]===o?C.green:C.sub}}>{o}</button>)}</div></div>);
+  const Stars=({label,field})=>(<div style={{marginBottom:14}}><Lbl t={label}/><div style={{display:"flex",gap:8}}>{[1,2,3,4,5].map(n=><button key={n} onClick={()=>setF(field,String(n))} style={{width:38,height:38,borderRadius:"50%",border:"1px solid",cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,background:log[field]===String(n)?C.green:"transparent",borderColor:log[field]===String(n)?C.green:"rgba(255,255,255,0.12)",color:log[field]===String(n)?"#1a2332":C.sub}}>{n}</button>)}</div></div>);
+  const WodStars=({label,idx,field})=>(<div style={{marginBottom:12}}><Lbl t={label}/><div style={{display:"flex",gap:7}}>{[1,2,3,4,5].map(n=><button key={n} onClick={()=>setWod(idx,field,String(n))} style={{width:36,height:36,borderRadius:"50%",border:"1px solid",cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,background:log.workouts[idx]?.[field]===String(n)?C.gold:"transparent",borderColor:log.workouts[idx]?.[field]===String(n)?C.gold:"rgba(255,255,255,0.12)",color:log.workouts[idx]?.[field]===String(n)?"#1a2332":C.sub}}>{n}</button>)}</div></div>);
+
+  const activeSections = SECTIONS.filter(s => s!=="whoop" || profile.useWhoop);
+
+  const sections = {
+    whoop:(
+      <div>
+        <p style={{fontSize:13,color:C.sub,marginBottom:18,lineHeight:1.7}}>Check Whoop first thing. Sets your training intensity for today.</p>
+        {recTierVal&&(<div style={{background:`${REC[recTierVal].color}18`,border:`1px solid ${REC[recTierVal].color}44`,borderRadius:10,padding:"12px 15px",marginBottom:18}}><div style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",color:REC[recTierVal].color}}>TODAY'S TRAINING GUIDANCE</div><div style={{fontSize:15,color:C.txt,marginTop:3}}>{REC[recTierVal].label}</div>{log.whoopStrain&&<div style={{fontSize:12,color:C.sub,marginTop:3}}>Recommended strain: <strong style={{color:C.gold}}>{log.whoopStrain}</strong></div>}</div>)}
+        <div style={{display:"flex",flexWrap:"wrap",justifyContent:"space-between"}}>
+          <Field label="Recovery %" field="whoopRecovery" type="number" placeholder="67" half/>
+          <Field label="HRV (ms)" field="whoopHRV" type="number" placeholder="34" half/>
+          <Field label="RHR (bpm)" field="whoopRHR" type="number" placeholder="71" half/>
+          <Field label="Sleep Score %" field="whoopSleep" type="number" placeholder="80" half/>
+          <Field label="Recommended Strain" field="whoopStrain" type="number" placeholder="10.6" half/>
+        </div>
+        {log.whoopStrain&&(()=>{ const rec=Number(log.whoopStrain),used=Number(totalStrain)||0,pct=Math.min(100,(used/Math.max(rec,0.1))*100),over=used>rec; return(<div style={{marginTop:4,background:C.card,border:`1px solid ${C.bd}`,borderRadius:10,padding:"12px 14px"}}><div style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.sub,marginBottom:8,textTransform:"uppercase"}}>Daily Strain Budget</div><div style={{height:8,background:"rgba(255,255,255,0.06)",borderRadius:4,overflow:"hidden",marginBottom:6}}><div style={{height:"100%",width:`${pct}%`,background:over?C.red:C.gold,borderRadius:4,transition:"width 0.4s"}}/></div><div style={{fontSize:13,color:over?C.red:C.gold,fontWeight:600}}>{used} / {rec} strain used {over?"⚠ Over budget":"✓"}</div></div>); })()}
+      </div>
+    ),
+    weight:(
+      <div>
+        <p style={{fontSize:13,color:C.sub,marginBottom:18,lineHeight:1.7}}>Weigh after waking — after bathroom, before food or water.</p>
+        <div style={{display:"flex",flexWrap:"wrap",justifyContent:"space-between"}}>
+          <Field label="Weight (kg)" field="weight" type="number" placeholder={String(SW||"70.0")} half/>
+          <Field label="Time weighed" field="weighTime" placeholder="8:00am" half/>
+        </div>
+        {log.weight&&(()=>{ const prev=Object.entries(saved).filter(([k])=>k!==key).sort((a,b)=>b[0].localeCompare(a[0]))[0]; if(!prev?.[1]?.weight) return null; const diff=(Number(log.weight)-Number(prev[1].weight)).toFixed(1),down=diff<0; return(<div style={{background:down?"rgba(168,197,160,0.1)":"rgba(232,133,122,0.1)",border:`1px solid ${down?"rgba(168,197,160,0.3)":"rgba(232,133,122,0.3)"}`,borderRadius:10,padding:"11px 14px"}}><span style={{color:down?C.green:C.red,fontWeight:700}}>{down?"▼":"▲"} {Math.abs(diff)} kg from yesterday</span><span style={{color:C.sub,fontSize:13}}> ({prev[1].weight} → {log.weight} kg)</span></div>); })()}
+      </div>
+    ),
+    sleep:(
+      <div>
+        <div style={{display:"flex",flexWrap:"wrap",justifyContent:"space-between"}}>
+          <Field label="Bedtime" field="bedtime" placeholder="11:00pm" half/>
+          <Field label="Wake Time" field="wakeTime" placeholder="7:00am" half/>
+          <Field label="Total Hours" field="sleepHours" type="number" placeholder="8" half/>
+        </div>
+        <Stars label="Sleep Quality (1–5)" field="sleepQuality"/>
+        <Field label="Notes" field="sleepNotes" placeholder="Deep, restless, woke once..."/>
+        {log.sleepHours&&(<div style={{background:Number(log.sleepHours)>=7.5?"rgba(168,197,160,0.1)":"rgba(232,133,122,0.1)",border:`1px solid ${Number(log.sleepHours)>=7.5?"rgba(168,197,160,0.3)":"rgba(232,133,122,0.3)"}`,borderRadius:10,padding:"11px 14px"}}><span style={{color:Number(log.sleepHours)>=7.5?C.green:C.red,fontWeight:700}}>{Number(log.sleepHours)>=7.5?"✓ Sleep target hit":`⚠ ${(7.5-Number(log.sleepHours)).toFixed(1)}h below 7.5h target`}</span></div>)}
+      </div>
+    ),
+    water:(
+      <div>
+        <p style={{fontSize:13,color:C.sub,marginBottom:18,lineHeight:1.7}}>Yesterday's total. Target: <strong style={{color:C.blue}}>{WT}L minimum</strong>.</p>
+        <Field label="Total Water (L)" field="water" type="number" placeholder={String(WT)}/>
+        {log.water&&<><div style={{height:8,background:"rgba(255,255,255,0.06)",borderRadius:4,overflow:"hidden",marginBottom:6}}><div style={{height:"100%",width:`${Math.min(100,(Number(log.water)/Math.max(WT*1.2,3))*100)}%`,background:Number(log.water)>=WT?C.green:C.red,borderRadius:4,transition:"width 0.4s"}}/></div><div style={{fontSize:12,color:C.sub,marginBottom:16}}>{Number(log.water)>=WT?`✓ Target hit — ${log.water}L`:`${log.water}L / ${WT}L — ${(WT-Number(log.water)).toFixed(1)}L to go`}</div></>}
+        <div style={{background:"rgba(137,180,201,0.07)",borderRadius:10,padding:"14px"}}><div style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.blue,marginBottom:8}}>HYDRATION PLAN</div>{[["On waking","500ml"],["Mid morning","500ml"],["Afternoon","500ml"],["Evening","500ml+"]].map(([t,a])=>(<div key={t} style={{display:"flex",justifyContent:"space-between",fontSize:13,color:"#c8d8e8",padding:"3px 0"}}><span>{t}</span><span style={{color:C.blue,fontWeight:600}}>{a}</span></div>))}</div>
+      </div>
+    ),
+    nutrition:(
+      <div>
+        <div style={{display:"flex",flexWrap:"wrap",justifyContent:"space-between"}}>
+          <Field label="Total Calories" field="calories" type="number" placeholder="1500" half/>
+          <Field label="Protein (g)" field="protein" type="number" placeholder={String(PT)} half/>
+          <Field label="Carbs (g)" field="carbs" type="number" placeholder="140" half/>
+          <Field label="Fats (g)" field="fats" type="number" placeholder="60" half/>
+          <Field label="Last Meal Time" field="lastMeal" placeholder="8:00pm" half/>
+        </div>
+        <Radio label="Late Eating?" field="lateEating" opts={["Y","N"]}/>
+        <Field label="Notes" field="foodNotes" placeholder="Craved sweets..."/>
+        {log.protein&&<><div style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.sub,marginBottom:6,textTransform:"uppercase"}}>Protein Progress</div><div style={{height:8,background:"rgba(255,255,255,0.06)",borderRadius:4,overflow:"hidden",marginBottom:6}}><div style={{height:"100%",width:`${Math.min(100,(Number(log.protein)/(PT*1.2))*100)}%`,background:Number(log.protein)>=PT?C.green:Number(log.protein)>=PT*0.7?"#e8c96e":C.red,borderRadius:4,transition:"width 0.4s"}}/></div><div style={{fontSize:12,color:C.sub,marginBottom:14}}>{Number(log.protein)>=PT?`✓ ${log.protein}g — target hit!`:`${log.protein}g / ${PT}g — need ${PT-Number(log.protein)}g more`}</div></>}
+        <div style={{background:"rgba(201,169,110,0.07)",borderRadius:10,padding:"14px"}}><div style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.gold,marginBottom:8}}>YOUR CALORIE RANGE</div><div style={{display:"flex",justifyContent:"space-between",fontSize:14,color:"#c8d8e8",padding:"4px 0"}}><span>Daily target</span><span style={{color:C.gold,fontWeight:700}}>{profile.calorieMin}–{profile.calorieMax} kcal</span></div></div>
+      </div>
+    ),
+    training:(
+      <div>
+        {recTierVal&&(<div style={{background:`${REC[recTierVal].color}15`,border:`1px solid ${REC[recTierVal].color}40`,borderRadius:10,padding:"13px 15px",marginBottom:16}}><div style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",color:REC[recTierVal].color}}>WHOOP GUIDANCE</div><div style={{fontSize:15,color:C.txt,marginTop:3}}>{REC[recTierVal].label}</div></div>)}
+        {log.workouts.map((wod,idx)=>{
+          const isOpen=expWod===idx;
+          const zoneColor=(()=>{const m=Number(wod.maxHR);if(!m)return C.sub;if(m>=171)return C.red;if(m>=152)return"#e8a870";if(m>=133)return"#e8c96e";return C.green;})();
+          const zoneName=(()=>{const m=Number(wod.maxHR);if(!m)return"";if(m>=171)return"Z5 Max";if(m>=152)return"Z4 Hard";if(m>=133)return"Z3 Mod";return"Z2 Easy";})();
+          return(
+            <div key={wod.id} style={{border:`1px solid ${C.bd}`,borderRadius:12,marginBottom:10,overflow:"hidden",background:C.card}}>
+              <div onClick={()=>setExpWod(isOpen?-1:idx)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"13px 15px",cursor:"pointer"}}>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{width:26,height:26,borderRadius:8,background:"rgba(168,197,160,0.15)",border:"1px solid rgba(168,197,160,0.3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700,color:C.green}}>{idx+1}</div>
+                  <div><div style={{fontSize:14,fontWeight:600,color:C.txt}}>{wod.type||`Workout ${idx+1}`}</div><div style={{fontSize:11,color:C.sub,marginTop:1}}>{[wod.duration&&`${wod.duration}`,wod.strain&&`Strain ${wod.strain}`].filter(Boolean).join(" · ")||"Tap to fill in"}</div></div>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  {(wod.avgHR||wod.maxHR)&&<span style={{fontSize:11,color:zoneColor,fontWeight:700}}>{zoneName}</span>}
+                  {log.workouts.length>1&&<button onClick={e=>{e.stopPropagation();delWod(idx);}} style={{width:24,height:24,borderRadius:"50%",border:"1px solid rgba(232,133,122,0.4)",background:"transparent",color:C.red,cursor:"pointer",fontSize:16,lineHeight:1}}>×</button>}
+                  <div style={{color:C.sub,fontSize:18,lineHeight:1}}>{isOpen?"−":"+"}</div>
+                </div>
+              </div>
+              {isOpen&&(<div style={{padding:"0 15px 15px",borderTop:`1px solid ${C.bd}`}}><div style={{paddingTop:14}}>
+                <WF label="Training Type" idx={idx} field="type" placeholder="Running, Gym, Yoga..."/>
+                <div style={{display:"flex",flexWrap:"wrap",justifyContent:"space-between"}}>
+                  <WF label="Duration" idx={idx} field="duration" placeholder="45 min" half/>
+                  <WF label="Whoop Strain" idx={idx} field="strain" type="number" placeholder="8.0" half/>
+                  <WF label="Avg HR (bpm)" idx={idx} field="avgHR" type="number" placeholder="135" half/>
+                  <WF label="Max HR (bpm)" idx={idx} field="maxHR" type="number" placeholder="175" half/>
+                </div>
+                <WodStars label="Intensity (1–5)" idx={idx} field="intensity"/>
+                <WodStars label="Energy During Session (1–5)" idx={idx} field="energy"/>
+                <WodRadio label="Fasted?" idx={idx} field="fasted" opts={["Y","N"]}/>
+              </div></div>)}
+            </div>
+          );
+        })}
+        <button onClick={addWod} style={{width:"100%",padding:"12px",borderRadius:10,border:"1.5px dashed rgba(168,197,160,0.35)",background:"transparent",color:C.green,fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit",marginTop:2}}>+ Add Another Workout</button>
+      </div>
+    ),
+    wellbeing:(
+      <div>
+        <Stars label="Energy (1–5)" field="energy"/>
+        <Stars label="Hunger (1–5)" field="hunger"/>
+        <Stars label="Stress (1–5)" field="stress"/>
+        <Stars label="Mood (1–5)" field="mood"/>
+        <Radio label="Bloating / Heaviness?" field="bloating" opts={["Y","N"]}/>
+        {profile.trackCycle&&<Field label="Menstrual Cycle Day" field="cycleDay" placeholder="Day 1, Day 14..."/>}
+        <Field label="Any Notes" field="notes" placeholder="How are you feeling today..."/>
+      </div>
+    ),
+    checklist:(
+      <div>
+        <p style={{fontSize:13,color:C.sub,marginBottom:18,lineHeight:1.7}}>Only tick if genuinely completed.</p>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {checkItems.filter(({key:k})=>k!=="whoop"||profile.useWhoop).map(({key:k,label,sub})=>(
+            <div key={k} onClick={()=>setChk(k,!log.checklist[k])} style={{display:"flex",alignItems:"center",gap:14,background:log.checklist[k]?"rgba(168,197,160,0.1)":C.card,border:`1px solid ${log.checklist[k]?"rgba(168,197,160,0.35)":C.bd}`,borderRadius:10,padding:"13px 15px",cursor:"pointer"}}>
+              <div style={{width:22,height:22,borderRadius:6,border:`2px solid ${log.checklist[k]?C.green:"rgba(255,255,255,0.2)"}`,background:log.checklist[k]?C.green:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                {log.checklist[k]&&<span style={{color:"#1a2332",fontSize:12,fontWeight:800}}>✓</span>}
+              </div>
+              <div><div style={{color:log.checklist[k]?C.green:"#c8d8e8",fontSize:14,fontWeight:500}}>{label}</div><div style={{color:C.sub,fontSize:12,marginTop:2}}>{sub}</div></div>
+            </div>
+          ))}
+        </div>
+        <div style={{marginTop:22,textAlign:"center"}}>
+          <div style={{fontSize:44,fontWeight:700,color:score>=5?C.green:score>=3?"#e8c96e":C.red}}>{score}/6</div>
+          <div style={{color:C.sub,fontSize:13,marginTop:4}}>{score>=5?"Outstanding day 🌟":score>=3?"Good — keep pushing":"Focus on the basics tomorrow"}</div>
+        </div>
+      </div>
+    ),
+  };
+
+  const histDates=Object.keys(saved).sort((a,b)=>b.localeCompare(a)).slice(0,14);
+
+  return(
+    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans','Segoe UI',sans-serif",color:C.txt}}>
+      {/* Header */}
+      <div style={{background:"rgba(255,255,255,0.02)",borderBottom:`1px solid ${C.bd}`,padding:"15px 20px",position:"sticky",top:0,zIndex:10,backdropFilter:"blur(12px)"}}>
+        <div style={{maxWidth:480,margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:20,color:C.txt}}>{profile.name?`${profile.name}'s Tracker`:"Daily Tracker"}</div>
+            <div style={{fontSize:11,color:C.sub,marginTop:1}}>{FULL_DAYS[dow]}, {new Date().toLocaleDateString("en-GB",{day:"numeric",month:"short"})}</div>
+          </div>
+          <div style={{display:"flex",gap:5,alignItems:"center"}}>
+            {["today","history"].map(v=>(<button key={v} onClick={()=>setView(v)} style={{padding:"5px 11px",borderRadius:20,fontSize:11,fontWeight:600,letterSpacing:"0.05em",textTransform:"uppercase",cursor:"pointer",fontFamily:"inherit",border:"1px solid",background:view===v?"rgba(168,197,160,0.15)":"transparent",borderColor:view===v?C.green:"rgba(255,255,255,0.1)",color:view===v?C.green:C.sub}}>{v}</button>))}
+            <button onClick={()=>setShowSettings(!showSettings)} style={{width:32,height:32,borderRadius:"50%",border:`1px solid ${C.bd}`,background:"transparent",color:C.sub,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>⚙</button>
+          </div>
+        </div>
+      </div>
+
+      {showSettings&&(
+        <div style={{background:"rgba(15,25,35,0.98)",borderBottom:`1px solid ${C.bd}`,padding:"20px"}}>
+          <div style={{maxWidth:480,margin:"0 auto"}}>
+            <div style={{fontSize:14,fontWeight:600,color:C.txt,marginBottom:14}}>⚙ Settings</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:"4%"}}>
+              {[{label:"Start Weight (kg)",field:"startWeight"},{label:"Goal Weight (kg)",field:"goalWeight"},{label:"Protein Target (g)",field:"proteinTarget"},{label:"Water Target (L)",field:"waterTarget"},{label:"Min Calories",field:"calorieMin"},{label:"Max Calories",field:"calorieMax"}].map(({label,field})=>(
+                <div key={field} style={{width:"48%",marginBottom:12}}>
+                  <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",color:C.sub,textTransform:"uppercase",marginBottom:5}}>{label}</div>
+                  <input type="number" inputMode="decimal" defaultValue={profile[field]} onBlur={e=>{const p={...profile,[field]:e.target.value};setProfile(p);persist(p,saved);}} style={{width:"100%",background:"rgba(255,255,255,0.055)",border:"1.5px solid rgba(255,255,255,0.1)",borderRadius:9,padding:"10px 12px",color:C.txt,fontSize:14,outline:"none",fontFamily:"inherit",WebkitAppearance:"none",MozAppearance:"textfield"}} onFocus={e=>e.target.style.borderColor="rgba(168,197,160,0.55)"}/>
+                </div>
+              ))}
+            </div>
+            <button onClick={()=>setShowSettings(false)} style={{width:"100%",padding:"10px",borderRadius:9,border:`1px solid ${C.green}`,background:"rgba(168,197,160,0.1)",color:C.green,fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit",marginTop:4}}>Done</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{maxWidth:480,margin:"0 auto",padding:"0 16px 100px"}}>
+        {view==="today"&&<>
+          <div style={{padding:"16px 0 0"}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+              <span style={{fontSize:11,fontWeight:600,letterSpacing:"0.08em",color:C.sub,textTransform:"uppercase"}}>Today's Progress</span>
+              <span style={{fontSize:11,color:C.green,fontWeight:600}}>{score}/6 targets</span>
+            </div>
+            <div style={{height:4,background:"rgba(255,255,255,0.06)",borderRadius:2}}><div style={{height:"100%",width:`${(score/6)*100}%`,background:`linear-gradient(90deg,${C.green},${C.blue})`,borderRadius:2,transition:"width 0.4s"}}/></div>
+          </div>
+
+          {SW&&GW&&(<div style={{margin:"14px 0",background:C.card,border:`1px solid ${C.bd}`,borderRadius:12,padding:"14px 16px"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div><div style={{fontSize:11,fontWeight:600,letterSpacing:"0.08em",color:C.sub,textTransform:"uppercase",marginBottom:3}}>Goal Weight</div><div style={{fontSize:23,fontFamily:"'DM Serif Display',serif"}}>{GW} kg</div></div>
+              <div style={{textAlign:"right"}}><div style={{fontSize:11,color:C.sub,marginBottom:3}}>Today</div><div style={{fontSize:23,fontFamily:"'DM Serif Display',serif",color:C.green}}>{log.weight||SW} kg</div></div>
+            </div>
+            <div style={{marginTop:12}}><div style={{height:6,background:"rgba(255,255,255,0.06)",borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:`${progressPct}%`,background:`linear-gradient(90deg,${C.red},${C.gold},${C.green})`,borderRadius:3}}/></div>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:C.sub,marginTop:5}}><span>Start: {SW}</span><span style={{color:C.green}}>{progressPct.toFixed(0)}% to goal</span><span>Goal: {GW}</span></div></div>
+          </div>)}
+
+          <div className="stabs" style={{marginBottom:4}}>
+            {activeSections.map(s=>(<button key={s} onClick={()=>setSec(s)} style={{flexShrink:0,padding:"6px 12px",borderRadius:20,fontSize:12,cursor:"pointer",fontFamily:"inherit",border:"1px solid",whiteSpace:"nowrap",background:sec===s?"rgba(168,197,160,0.15)":"transparent",borderColor:sec===s?C.green:"rgba(255,255,255,0.08)",color:sec===s?C.green:C.sub}}>{SLABELS[s]}</button>))}
+          </div>
+
+          <div style={{background:C.card,border:`1px solid ${C.bd}`,borderRadius:14,padding:"20px 16px",marginTop:8}}>
+            <div style={{fontSize:16,fontWeight:600,color:C.txt,marginBottom:18}}>{SLABELS[sec]}</div>
+            {sections[sec]}
+          </div>
+
+          <div style={{display:"flex",gap:8,marginTop:12}}>
+            <button onClick={()=>{const i=activeSections.indexOf(sec);if(i>0)setSec(activeSections[i-1]);}} disabled={activeSections.indexOf(sec)===0} style={{flex:1,padding:"12px",borderRadius:10,border:`1px solid ${C.bd}`,background:"transparent",color:C.sub,fontSize:13,cursor:"pointer",fontFamily:"inherit",opacity:activeSections.indexOf(sec)===0?0.3:1}}>← Back</button>
+            {activeSections.indexOf(sec)<activeSections.length-1
+              ?<button onClick={()=>{const i=activeSections.indexOf(sec);setSec(activeSections[i+1]);}} style={{flex:1,padding:"12px",borderRadius:10,border:`1px solid ${C.green}`,background:"rgba(168,197,160,0.1)",color:C.green,fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>Next →</button>
+              :<button onClick={saveLog} style={{flex:1,padding:"12px",borderRadius:10,border:"none",background:saveFb?"#6db87a":C.green,color:"#1a2332",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",transition:"background 0.3s"}}>{saveFb?"✓ Saved!":"Save Log"}</button>
+            }
+          </div>
+        </>}
+
+        {view==="history"&&(
+          <div style={{paddingTop:20}}>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:22,marginBottom:5}}>Log History</div>
+            <div style={{fontSize:13,color:C.sub,marginBottom:20}}>Tap <strong style={{color:C.green}}>Copy for Chat</strong> to share your log with your coach.</div>
+            {histDates.length===0&&<div style={{textAlign:"center",color:C.sub,padding:"40px 0"}}>No logs saved yet. Fill in today's check-in first!</div>}
+            {histDates.map(date=>{
+              const e=saved[date]; const sc=Object.values(e.checklist||{}).filter(Boolean).length;
+              const d=new Date(date); const wods=e.workouts||[];
+              const totalS=wods.reduce((a,w)=>a+(Number(w.strain)||0),0).toFixed(1);
+              const isCopied=copied===date;
+              return(
+                <div key={date} style={{background:C.card,border:`1px solid ${C.bd}`,borderRadius:12,padding:"14px 16px",marginBottom:8}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                    <div><div style={{fontSize:14,fontWeight:600,color:C.txt}}>{FULL_DAYS[d.getDay()]}, {d.toLocaleDateString("en-GB",{day:"numeric",month:"short"})}</div>{e.weight&&<div style={{fontSize:22,fontFamily:"'DM Serif Display',serif",color:C.green,marginTop:2}}>{e.weight} kg</div>}</div>
+                    <div style={{textAlign:"right"}}><div style={{fontSize:26,fontWeight:700,color:sc>=5?C.green:sc>=3?"#e8c96e":C.red}}>{sc}/6</div><div style={{fontSize:11,color:C.sub}}>targets</div></div>
+                  </div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
+                    {[["💧",e.water?e.water+"L":"—"],["🥩",e.protein?e.protein+"g":"—"],["😴",e.sleepHours?e.sleepHours+"h":"—"],["🔥",e.calories?e.calories+" kcal":"—"],["🔋",e.whoopRecovery?e.whoopRecovery+"%":"—"],["⚡",totalS!=="0.0"?totalS+" strain":"—"],["🏃",wods.filter(w=>w.type).map(w=>w.type).join(", ")||"—"]].map(([icon,val])=>(<div key={icon} style={{background:"rgba(255,255,255,0.03)",borderRadius:8,padding:"5px 10px",fontSize:12,color:"#c8d8e8"}}>{icon} {val}</div>))}
+                  </div>
+                  <button onClick={()=>copyLog(date)} style={{width:"100%",padding:"10px 14px",borderRadius:9,border:`1.5px solid ${isCopied?"#6db87a":C.green}`,background:isCopied?"rgba(109,184,122,0.15)":"rgba(168,197,160,0.08)",color:isCopied?"#6db87a":C.green,fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+                    {isCopied?<><span>✓</span> Copied — paste into chat now</>:<><span style={{fontSize:15}}>📋</span> Copy Log for Chat</>}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
